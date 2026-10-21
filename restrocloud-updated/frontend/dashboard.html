@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>My Dashboard - RestroCloud</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>%F0%9F%8D%BD%EF%B8%8F</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <nav class="navbar">
+        <a href="index.html" class="brand">RestroCloud</a>
+        <div class="nav-links">
+            <a href="restaurants.html">Browse Restaurants</a>
+            <span id="auth-links"></span>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div class="page-heading-row">
+            <h1>My Dashboard</h1>
+            <button type="button" class="secondary" id="view-order-queue" style="display:none">View queued orders</button>
+        </div>
+
+        <p id="dashboard-message" role="status" aria-live="polite"></p>
+        <div id="restaurant-section"><div class="spinner"></div></div>
+
+        <div id="menu-section" style="display: none;">
+            <h2 id="menu-form-title">Add a Menu Item</h2>
+            <form id="menu-form" class="form-card">
+                <input type="hidden" id="item-id">
+
+                <label>Item Name</label>
+                <input type="text" id="item-name" required>
+
+                <label>Description</label>
+                <input type="text" id="item-description">
+
+                <label>Price</label>
+                <input type="number" step="0.01" min="0" id="item-price" required>
+
+                <label>Category</label>
+                <input type="text" id="item-category" placeholder="e.g. Starters, Main Course" required>
+
+                <div class="button-row">
+                    <button type="submit" id="menu-form-submit">Add Item</button>
+                    <button type="button" class="secondary" id="menu-form-cancel" style="display: none;">Cancel</button>
+                </div>
+            </form>
+
+            <h2>Your Menu</h2>
+            <table class="menu-table" id="menu-table"></table>
+        </div>
+
+        <section id="orders-section" class="order-queue" style="display: none;">
+            <div class="page-heading-row">
+                <div><h2>Order Queue <span class="pending-badge" id="pending-badge" style="display:none"></span></h2><p class="muted">Accept or reject incoming customer orders. This queue refreshes automatically.</p></div>
+                <button type="button" class="secondary" id="refresh-order-queue">Refresh queue</button>
+            </div>
+            <div class="order-filter-tabs" id="order-filter-tabs" role="tablist"></div>
+            <p id="order-queue-message" role="status" aria-live="polite"></p>
+            <div id="order-queue-list"><div class="spinner"></div></div>
+        </section>
+    </main>
+
+    <script src="api.js"></script>
+    <script src="nav.js"></script>
+    <script>
+        // Only logged-in owners may use this page.
+        const currentUser = getUser();
+        if (!currentUser || currentUser.role !== "owner") {
+            window.location.href = "login.html";
+        }
+
+        let myRestaurant = null;
+        let myMenuItems = [];
+        let orderQueueTimer = null;
+        let orderQueueInitialized = false;
+        let orderQueueLoading = false;
+        const processingOrderIds = new Set();
+
+        function showDashboardMessage(message, isError = false) {
+            const target = document.getElementById("dashboard-message");
+            target.className = isError ? "error" : "success-message";
+            target.textContent = message;
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? "").replace(/[&<>"']/g, char => ({
+                "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+            })[char]);
+        }
+
+        function formatDate(value) {
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? "Date unavailable" : date.toLocaleString();
+        }
+
+        async function loadDashboard() {
+            try {
+                myRestaurant = await apiRequest("/my-restaurant");
+            } catch (error) {
+                myRestaurant = null; // a 404 means no restaurant has been created yet
+                if (error.message && !error.message.toLowerCase().includes("haven't created a restaurant yet")) {
+                    const section = document.getElementById("restaurant-section");
+                    section.innerHTML = `<p class="error">${escapeHtml(error.message)}. Refresh the page or log in again.</p>`;
+                    return;
+                }
+            }
+
+            renderRestaurantSection();
+
+            if (myRestaurant) {
+                document.getElementById("menu-section").style.display = "block";
+                document.getElementById("orders-section").style.display = "block";
+                document.getElementById("view-order-queue").style.display = "inline-block";
+                try {
+                    await loadMenuItems();
+                    startOrderQueue();
+                } catch (error) {
+                    showDashboardMessage(error.message, true);
+                }
+            }
+        }
+
+        // ---------- Restaurant details (create or edit) ----------
+
+        function renderRestaurantSection() {
+            const section = document.getElementById("restaurant-section");
+
+            if (!myRestaurant) {
+                section.innerHTML = `
+                    <h2>Set up your restaurant</h2>
+                    <form id="restaurant-form" class="form-card">
+                        <label>Restaurant Name</label>
+                        <input type="text" id="r-name" required>
+                        <label>Description</label>
+                        <textarea id="r-description"></textarea>
+                        <label>Address</label>
+                        <input type="text" id="r-address" required>
+                        <label>Phone</label>
+                        <input type="text" id="r-phone" required>
+                        <label>Cuisine Type</label>
+                        <input type="text" id="r-cuisine" placeholder="e.g. Indian, Chinese">
+                        <button type="submit">Create Restaurant</button>
+                    </form>
+                `;
+            } else {
+                section.innerHTML = `
+                    <h2>${escapeHtml(myRestaurant.name)}</h2>
+                    <details>
+                        <summary>Edit restaurant details</summary>
+                        <form id="restaurant-form" class="form-card">
+                            <label>Restaurant Name</label>
+                            <input type="text" id="r-name" value="${escapeHtml(myRestaurant.name)}" required>
+                            <label>Description</label>
+                            <textarea id="r-description">${escapeHtml(myRestaurant.description || "")}</textarea>
+                            <label>Address</label>
+                            <input type="text" id="r-address" value="${escapeHtml(myRestaurant.address || "")}" required>
+                            <label>Phone</label>
+                            <input type="text" id="r-phone" value="${escapeHtml(myRestaurant.phone || "")}" required>
+                            <label>Cuisine Type</label>
+                            <input type="text" id="r-cuisine" value="${escapeHtml(myRestaurant.cuisine || "")}">
+                            <button type="submit">Save Changes</button>
+                        </form>
+                    </details>
+                `;
+            }
+
+            document.getElementById("restaurant-form").addEventListener("submit", saveRestaurant);
+        }
+
+        async function saveRestaurant(event) {
+            event.preventDefault();
+
+            const payload = {
+                name: document.getElementById("r-name").value,
+                description: document.getElementById("r-description").value,
+                address: document.getElementById("r-address").value,
+                phone: document.getElementById("r-phone").value,
+                cuisine: document.getElementById("r-cuisine").value,
+            };
+
+            try {
+                myRestaurant = await apiRequest("/my-restaurant", "POST", payload);
+                renderRestaurantSection();
+                document.getElementById("menu-section").style.display = "block";
+                document.getElementById("orders-section").style.display = "block";
+                document.getElementById("view-order-queue").style.display = "inline-block";
+                await loadMenuItems();
+                startOrderQueue();
+                showDashboardMessage("Restaurant details saved.");
+            } catch (error) {
+                showDashboardMessage(error.message, true);
+            }
+        }
+
+
+        function startOrderQueue() {
+            if (!orderQueueInitialized) {
+                document.getElementById("refresh-order-queue").addEventListener("click", () => loadOrderQueue());
+                document.getElementById("view-order-queue").addEventListener("click", () => {
+                    document.getElementById("orders-section").scrollIntoView({ behavior: "smooth", block: "start" });
+                });
+                orderQueueInitialized = true;
+            }
+            loadOrderQueue();
+            if (!orderQueueTimer) orderQueueTimer = window.setInterval(() => loadOrderQueue(), 10000);
+        }
+
+        // ---------- Menu items (add, edit, hide/show, delete) ----------
+
+        async function loadMenuItems() {
+            myMenuItems = await apiRequest("/menu");
+            const table = document.getElementById("menu-table");
+            const headerRow = `
+                <tr><th>Name</th><th>Category</th><th>Price</th><th>Status</th><th>Actions</th></tr>
+            `;
+
+            if (myMenuItems.length === 0) {
+                table.innerHTML = headerRow + `
+                    <tr><td colspan="5">
+                        <div class="empty-state">
+                            <span class="icon">🍳</span>
+                            No menu items yet — add your first one above.
+                        </div>
+                    </td></tr>
+                `;
+                return;
+            }
+
+            const rows = myMenuItems.map(item => `
+                <tr>
+                    <td>${escapeHtml(item.name)}</td>
+                    <td>${escapeHtml(item.category)}</td>
+                    <td>₹${item.price}</td>
+                    <td><span class="status-pill ${item.is_available ? "available" : "hidden"}">${item.is_available ? "Available" : "Hidden"}</span></td>
+                    <td class="actions">
+                        <button type="button" class="secondary" onclick="startEditItem(${item.id})">✎ Edit</button>
+                        <button type="button" class="secondary" onclick="toggleItem(${item.id})">${item.is_available ? "🙈 Hide" : "👁 Show"}</button>
+                        <button type="button" class="danger" onclick="deleteItem(${item.id})">🗑 Delete</button>
+                    </td>
+                </tr>
+            `).join("");
+
+            table.innerHTML = headerRow + rows;
+        }
+
+        // The same form is used for both adding and editing - if item-id is
+        // filled in, submitting the form updates that item instead of adding a new one.
+        document.getElementById("menu-form").addEventListener("submit", async (event) => {
+            event.preventDefault();
+
+            const itemId = document.getElementById("item-id").value;
+            const payload = {
+                name: document.getElementById("item-name").value,
+                description: document.getElementById("item-description").value,
+                price: document.getElementById("item-price").value,
+                category: document.getElementById("item-category").value,
+            };
+
+            const submit = document.getElementById("menu-form-submit");
+            submit.disabled = true;
+            try {
+                if (itemId) {
+                    await apiRequest(`/menu/${itemId}`, "PUT", payload);
+                    showDashboardMessage("Menu item updated.");
+                } else {
+                    await apiRequest("/menu", "POST", payload);
+                    showDashboardMessage("Menu item added.");
+                }
+                resetMenuForm();
+                await loadMenuItems();
+            } catch (error) {
+                showDashboardMessage(error.message, true);
+            } finally {
+                submit.disabled = false;
+            }
+        });
+
+        function resetMenuForm() {
+            document.getElementById("menu-form").reset();
+            document.getElementById("item-id").value = "";
+            document.getElementById("menu-form-title").textContent = "Add a Menu Item";
+            document.getElementById("menu-form-submit").textContent = "Add Item";
+            document.getElementById("menu-form-cancel").style.display = "none";
+        }
+
+        document.getElementById("menu-form-cancel").addEventListener("click", resetMenuForm);
+
+        function startEditItem(itemId) {
+            const item = myMenuItems.find(candidate => candidate.id === itemId);
+
+            document.getElementById("item-id").value = item.id;
+            document.getElementById("item-name").value = item.name;
+            document.getElementById("item-description").value = item.description || "";
+            document.getElementById("item-price").value = item.price;
+            document.getElementById("item-category").value = item.category;
+
+            document.getElementById("menu-form-title").textContent = "Edit Menu Item";
+            document.getElementById("menu-form-submit").textContent = "Save Changes";
+            document.getElementById("menu-form-cancel").style.display = "inline-block";
+        }
+
+        async function toggleItem(itemId) {
+            try {
+                await apiRequest(`/menu/${itemId}/toggle`, "POST");
+                await loadMenuItems();
+                showDashboardMessage("Menu item availability updated.");
+            } catch (error) {
+                showDashboardMessage(error.message, true);
+            }
+        }
+
+        async function deleteItem(itemId) {
+            if (!confirm("Delete this item?")) return;
+            try {
+                await apiRequest(`/menu/${itemId}`, "DELETE");
+                await loadMenuItems();
+                showDashboardMessage("Menu item deleted.");
+            } catch (error) {
+                showDashboardMessage(error.message, true);
+            }
+        }
+
+        let allOrders = [];
+        let activeOrderFilter = "pending";
+
+        function renderOrderTabs() {
+            const counts = { pending: 0, accepted: 0, rejected: 0, all: allOrders.length };
+            allOrders.forEach(o => { if (counts[o.status] !== undefined) counts[o.status]++; });
+            const tabs = [["pending", "Pending"], ["accepted", "Accepted"], ["rejected", "Rejected"], ["all", "All"]];
+            document.getElementById("order-filter-tabs").innerHTML = tabs.map(([key, label]) =>
+                `<button type="button" role="tab" class="order-tab${key === activeOrderFilter ? " active" : ""}" onclick="setOrderFilter('${key}')">${label} (${counts[key]})</button>`
+            ).join("");
+            const badge = document.getElementById("pending-badge");
+            badge.textContent = counts.pending;
+            badge.style.display = counts.pending > 0 ? "inline-block" : "none";
+            document.title = (counts.pending > 0 ? `(${counts.pending}) ` : "") + document.title.replace(/^\(\d+\)\s*/, "");
+        }
+
+        function setOrderFilter(filter) {
+            activeOrderFilter = filter;
+            renderOrderList();
+        }
+
+        function renderOrderList() {
+            const list = document.getElementById("order-queue-list");
+            renderOrderTabs();
+            if (!allOrders.length) {
+                list.innerHTML = '<div class="empty-state"><span class="icon">🧾</span>No orders yet. New customer orders will appear here.</div>';
+                return;
+            }
+            const orders = activeOrderFilter === "all" ? allOrders : allOrders.filter(o => o.status === activeOrderFilter);
+            if (!orders.length) {
+                list.innerHTML = `<div class="empty-state"><span class="icon">✅</span>No ${activeOrderFilter} orders.</div>`;
+                return;
+            }
+            list.innerHTML = orders.map(order => `
+                <article class="order-card">
+                    <div class="order-card-heading">
+                        <div><h2>Order #${order.id}</h2><p class="muted">From ${escapeHtml(order.customer_name)} · ${escapeHtml(order.customer_email || "Email unavailable")}</p><p class="muted">Placed ${escapeHtml(formatDate(order.created_at))}</p><p><strong>Delivery address:</strong> ${escapeHtml(order.delivery_address || "No address provided")}</p></div>
+                        <span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(order.status.charAt(0).toUpperCase() + order.status.slice(1))}</span>
+                    </div>
+                    <div class="order-lines">${order.items.map(item => `
+                        <div class="order-line"><span>${escapeHtml(item.item_name)} × ${item.quantity} <span class="muted">(₹${escapeHtml(item.unit_price)} each)</span></span><strong>₹${escapeHtml(item.line_total)}</strong></div>
+                    `).join("")}</div>
+                    <div class="order-card-footer"><span class="muted">Updated ${escapeHtml(formatDate(order.updated_at))}</span><strong>Total: ₹${escapeHtml(order.total_amount)}</strong></div>
+                    ${order.status === "rejected" && order.rejection_reason ? `<p class="rejection-reason"><strong>Rejection reason:</strong> ${escapeHtml(order.rejection_reason)}</p>` : ""}
+                    ${order.status === "pending" ? `
+                        <div class="order-queue-actions">
+                            <button type="button" onclick="decideOrder(${order.id}, 'accepted')">Accept order</button>
+                            <button type="button" class="reject-button" onclick="decideOrder(${order.id}, 'rejected')">Reject order</button>
+                        </div>` : ""}
+                </article>`).join("");
+        }
+
+        async function loadOrderQueue(preserveMessage = false) {
+            if (orderQueueLoading) return;
+            orderQueueLoading = true;
+            const message = document.getElementById("order-queue-message");
+            try {
+                allOrders = await apiRequest("/owner/orders");
+                if (!preserveMessage) {
+                    message.className = "";
+                    message.textContent = "";
+                }
+                renderOrderList();
+            } catch (error) {
+                message.className = "error";
+                message.textContent = error.message;
+            } finally {
+                orderQueueLoading = false;
+            }
+        }
+
+        async function decideOrder(orderId, status) {
+            if (processingOrderIds.has(orderId)) return;
+            const action = status === "accepted" ? "accept" : "reject";
+            const payload = { status };
+            if (status === "rejected") {
+                const reason = prompt(`Reject order #${orderId}?\nOptionally tell the customer why (e.g. "Item out of stock"). Leave blank for no reason, or press Cancel to go back.`);
+                if (reason === null) return;
+                payload.reason = reason.trim().slice(0, 255);
+            } else if (!confirm(`Are you sure you want to ${action} order #${orderId}?`)) {
+                return;
+            }
+            processingOrderIds.add(orderId);
+            try {
+                await apiRequest(`/owner/orders/${orderId}`, "PATCH", payload);
+                const message = document.getElementById("order-queue-message");
+                message.className = "success-message";
+                message.textContent = `Order #${orderId} ${status}.`;
+                await loadOrderQueue(true);
+            } catch (error) {
+                const message = document.getElementById("order-queue-message");
+                message.className = "error";
+                message.textContent = error.message;
+                await loadOrderQueue(true);
+            } finally {
+                processingOrderIds.delete(orderId);
+            }
+        }
+
+        loadDashboard();
+    </script>
+</body>
+</html>

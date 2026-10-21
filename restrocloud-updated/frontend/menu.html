@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Restaurant Menu - RestroCloud</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>%F0%9F%8D%BD%EF%B8%8F</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <a href="index.html" class="brand">RestroCloud</a>
+        <div class="nav-links">
+            <a href="restaurants.html">Browse Restaurants</a>
+            <span id="auth-links"></span>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div id="restaurant-info"><div class="spinner"></div></div>
+        <div id="menu-list"></div>
+        <div id="order-actions"></div>
+        <p id="order-message" role="status" aria-live="polite"></p>
+        <div id="quantity-modal" class="modal-backdrop" style="display:none" role="dialog" aria-modal="true" aria-labelledby="quantity-modal-title">
+            <div class="quantity-dialog">
+                <button type="button" class="modal-close secondary" id="close-quantity-modal" aria-label="Close">×</button>
+                <h2 id="quantity-modal-title">Choose quantity</h2>
+                <p id="quantity-modal-description" class="muted"></p>
+                <label for="modal-quantity">Quantity</label>
+                <input id="modal-quantity" type="number" min="1" max="99" value="1" inputmode="numeric">
+                <div class="button-row">
+                    <button type="button" id="confirm-quantity">Add to order</button>
+                    <button type="button" class="secondary" id="remove-from-order">Remove item</button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="api.js"></script>
+    <script src="nav.js"></script>
+    <script>
+        const restaurantId = new URLSearchParams(window.location.search).get("id");
+        let menuItems = [];
+        const selectedQuantities = new Map();
+        let activeMenuItem = null;
+        let activeRequestKey = null;
+        const currentUser = getUser();
+
+        function escapeHtml(value) {
+            return String(value ?? "").replace(/[&<>"']/g, char => ({
+                "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+            })[char]);
+        }
+
+        function groupByCategory(items) {
+            return items.reduce((groups, item) => {
+                (groups[item.category] ||= []).push(item);
+                return groups;
+            }, {});
+        }
+
+        async function loadMenu() {
+            if (!restaurantId || !/^\d+$/.test(restaurantId)) {
+                document.getElementById("restaurant-info").innerHTML = '<p class="error">A valid restaurant was not specified.</p>';
+                return;
+            }
+            try {
+                const data = await apiRequest(`/restaurants/${restaurantId}`);
+                const restaurant = data.restaurant;
+                menuItems = data.menu_items;
+
+                document.getElementById("restaurant-info").innerHTML = `
+                    <div class="restaurant-banner">
+                        <span class="cuisine-badge">${escapeHtml(restaurant.cuisine || "Various")}</span>
+                        <h1>${escapeHtml(restaurant.name)}</h1>
+                        <p>${escapeHtml(restaurant.description || "")}</p>
+                        <p>📍 ${escapeHtml(restaurant.address || "")} &nbsp; ☎ ${escapeHtml(restaurant.phone || "")}</p>
+                    </div>`;
+
+                const listElement = document.getElementById("menu-list");
+                if (menuItems.length === 0) {
+                    listElement.innerHTML = '<div class="empty-state"><span class="icon">📋</span>This restaurant has no available menu items yet.</div>';
+                    document.getElementById("order-actions").innerHTML = "";
+                    return;
+                }
+
+                const byCategory = groupByCategory(menuItems);
+                listElement.innerHTML = Object.keys(byCategory).sort().map(category => `
+                    <h2 class="menu-category-title">${escapeHtml(category)}</h2>
+                    <div class="card-grid">
+                        ${byCategory[category].map(item => `
+                            <article class="card menu-item-card">
+                                <span class="price-tag">₹${escapeHtml(item.price)}</span>
+                                <h4>${escapeHtml(item.name)}</h4>
+                                <p class="muted">${escapeHtml(item.description || "")}</p>
+                                ${currentUser?.role === "customer" ? `
+                                    <p class="selected-quantity" id="selected-${item.id}">${selectedQuantities.has(item.id) ? `Selected: ${selectedQuantities.get(item.id)}` : "Not selected"}</p>
+                                    <button type="button" class="secondary choose-item-button" onclick="openQuantityPicker(${item.id})">${selectedQuantities.has(item.id) ? "Change quantity" : "Choose item"}</button>
+                                ` : ""}
+                            </article>`).join("")}
+                    </div>`).join("");
+
+                const actions = document.getElementById("order-actions");
+                if (currentUser?.role === "customer") {
+                    actions.innerHTML = `
+                        <section class="order-submit-panel checkout-panel">
+                            <div class="checkout-summary">
+                                <h2>Your order</h2>
+                                <p class="muted" id="checkout-restaurant-name">Order from ${escapeHtml(restaurant.name)}</p>
+                                <div id="order-cart-items" class="order-cart-items"></div>
+                                <p id="order-selection-summary" class="muted">Choose dishes to add them to your order. The restaurant must accept it before it is confirmed.</p>
+                            </div>
+                            <div class="checkout-fields">
+                                <label for="checkout-address">Delivery address</label>
+                                <textarea id="checkout-address" rows="3" maxlength="255" required placeholder="House/flat, street, area, city">${escapeHtml(currentUser.address || "")}</textarea>
+                                <p class="muted checkout-note">Confirm the address for this order. It will be saved with the order.</p>
+                                <button type="button" id="place-order-button">Place Order · Cash on delivery</button>
+                            </div>
+                        </section>`;
+                    document.getElementById("place-order-button").addEventListener("click", placeOrder);
+                    document.getElementById("close-quantity-modal").addEventListener("click", closeQuantityPicker);
+                    document.getElementById("confirm-quantity").addEventListener("click", savePickedQuantity);
+                    document.getElementById("remove-from-order").addEventListener("click", removePickedItem);
+                    document.getElementById("quantity-modal").addEventListener("click", event => {
+                        if (event.target.id === "quantity-modal") closeQuantityPicker();
+                    });
+                    updateOrderSummary();
+                } else if (currentUser?.role === "owner") {
+                    actions.innerHTML = '<p class="muted">Restaurant owner accounts can manage orders from the dashboard. Customer accounts can place orders.</p>';
+                } else {
+                    actions.innerHTML = '<div class="order-submit-panel"><p>Log in with a customer account to place an order.</p><a class="button" href="login.html">Log in</a> <a class="button secondary" href="register.html">Create account</a></div>';
+                }
+            } catch (error) {
+                document.getElementById("restaurant-info").innerHTML = `<p class="error">${escapeHtml(error.message)}</p>`;
+            }
+        }
+
+        function openQuantityPicker(itemId) {
+            activeMenuItem = menuItems.find(item => item.id === itemId);
+            if (!activeMenuItem) return;
+            document.getElementById("quantity-modal-title").textContent = activeMenuItem.name;
+            document.getElementById("quantity-modal-description").textContent = `₹${activeMenuItem.price} each`;
+            document.getElementById("modal-quantity").value = selectedQuantities.get(itemId) || 1;
+            document.getElementById("remove-from-order").style.display = selectedQuantities.has(itemId) ? "inline-block" : "none";
+            document.getElementById("quantity-modal").style.display = "flex";
+            document.getElementById("modal-quantity").focus();
+        }
+
+        function closeQuantityPicker() {
+            document.getElementById("quantity-modal").style.display = "none";
+            activeMenuItem = null;
+        }
+
+        function savePickedQuantity() {
+            const quantity = Number(document.getElementById("modal-quantity").value);
+            if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
+                document.getElementById("order-message").className = "error";
+                document.getElementById("order-message").textContent = "Quantity must be between 1 and 99.";
+                return;
+            }
+            selectedQuantities.set(activeMenuItem.id, quantity);
+            const selectedLabel = document.getElementById(`selected-${activeMenuItem.id}`);
+            if (selectedLabel) selectedLabel.textContent = `Selected: ${quantity}`;
+            const chooseButton = document.querySelector(`button[onclick="openQuantityPicker(${activeMenuItem.id})"]`);
+            if (chooseButton) chooseButton.textContent = "Change quantity";
+            closeQuantityPicker();
+            document.getElementById("order-message").textContent = "";
+            updateOrderSummary();
+        }
+
+        function removePickedItem() {
+            if (!activeMenuItem) return;
+            const itemId = activeMenuItem.id;
+            selectedQuantities.delete(itemId);
+            const selectedLabel = document.getElementById(`selected-${itemId}`);
+            if (selectedLabel) selectedLabel.textContent = "Not selected";
+            const chooseButton = document.querySelector(`button[onclick="openQuantityPicker(${itemId})"]`);
+            if (chooseButton) chooseButton.textContent = "Choose item";
+            closeQuantityPicker();
+            updateOrderSummary();
+        }
+
+        function updateOrderSummary() {
+            const summary = document.getElementById("order-selection-summary");
+            const cart = document.getElementById("order-cart-items");
+            if (!summary || !cart) return;
+            const chosenItems = menuItems.filter(item => selectedQuantities.has(item.id));
+            const count = [...selectedQuantities.values()].reduce((total, quantity) => total + quantity, 0);
+            const total = chosenItems.reduce((sum, item) => sum + Number(item.price) * selectedQuantities.get(item.id), 0);
+
+            if (!chosenItems.length) {
+                cart.innerHTML = '<p class="muted">Your cart is empty. Choose a dish above to get started.</p>';
+                summary.textContent = "The restaurant must accept your order before it is confirmed.";
+                return;
+            }
+
+            cart.innerHTML = chosenItems.map(item => {
+                const quantity = selectedQuantities.get(item.id);
+                const lineTotal = Number(item.price) * quantity;
+                return `
+                    <div class="cart-line">
+                        <div class="cart-line-details">
+                            <strong>${escapeHtml(item.name)}</strong>
+                            <span class="muted">₹${Number(item.price).toFixed(2)} each · Qty ${quantity}</span>
+                        </div>
+                        <strong>₹${lineTotal.toFixed(2)}</strong>
+                        <div class="cart-line-actions">
+                            <button type="button" class="secondary" onclick="openQuantityPicker(${item.id})">Edit</button>
+                            <button type="button" class="secondary" onclick="removeCartItem(${item.id})">Remove</button>
+                        </div>
+                    </div>`;
+            }).join("");
+            summary.textContent = `${count} item(s) · Subtotal ₹${total.toFixed(2)}. Final prices are verified by the server. The restaurant must accept your order.`;
+        }
+
+        function removeCartItem(itemId) {
+            selectedQuantities.delete(itemId);
+            const selectedLabel = document.getElementById(`selected-${itemId}`);
+            if (selectedLabel) selectedLabel.textContent = "Not selected";
+            const chooseButton = document.querySelector(`button[onclick="openQuantityPicker(${itemId})"]`);
+            if (chooseButton) chooseButton.textContent = "Choose item";
+            updateOrderSummary();
+        }
+
+        async function placeOrder() {
+            const message = document.getElementById("order-message");
+            const button = document.getElementById("place-order-button");
+            const items = [...selectedQuantities.entries()].map(([menu_item_id, quantity]) => ({
+                menu_item_id,
+                quantity
+            }));
+
+            if (items.length === 0) {
+                message.className = "error";
+                message.textContent = "Choose a quantity for at least one dish.";
+                return;
+            }
+            const addressInput = document.getElementById("checkout-address");
+            const deliveryAddress = addressInput.value.trim();
+            if (!deliveryAddress) {
+                message.className = "error";
+                message.textContent = "Enter a delivery address before placing your order.";
+                addressInput.focus();
+                return;
+            }
+            if (deliveryAddress.length > 255) {
+                message.className = "error";
+                message.textContent = "Delivery address must be 255 characters or fewer.";
+                addressInput.focus();
+                return;
+            }
+
+            button.disabled = true;
+            button.textContent = "Placing order…";
+            message.className = "muted";
+            message.textContent = "Submitting your order…";
+            try {
+                // Reuse the key after network errors so retrying checkout cannot create duplicates.
+                if (!activeRequestKey) {
+                    activeRequestKey = (window.crypto && window.crypto.randomUUID)
+                        ? window.crypto.randomUUID()
+                        : `rc-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`;
+                }
+                const result = await apiRequest("/orders", "POST", {
+                    restaurant_id: Number(restaurantId),
+                    items,
+                    delivery_address: deliveryAddress,
+                    request_key: activeRequestKey
+                });
+                window.location.href = `orders.html?placed=${encodeURIComponent(result.order_id)}`;
+            } catch (error) {
+                message.className = "error";
+                message.textContent = error.message;
+                button.disabled = false;
+                button.textContent = "Place Order";
+            }
+        }
+
+        loadMenu();
+    </script>
+</body>
+</html>

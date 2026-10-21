@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Browse Restaurants - RestroCloud</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>%F0%9F%8D%BD%EF%B8%8F</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <nav class="navbar">
+        <a href="index.html" class="brand">RestroCloud</a>
+        <div class="nav-links">
+            <a href="restaurants.html">Browse Restaurants</a>
+            <span id="auth-links"></span>
+        </div>
+    </nav>
+
+    <main class="container">
+        <h1>Browse Restaurants</h1>
+
+        <form id="search-form" class="search-form">
+            <input type="text" id="search-input" placeholder="Search by name or cuisine">
+            <button type="submit">Search</button>
+        </form>
+
+        <div id="restaurant-list"></div>
+    </main>
+
+    <script src="api.js"></script>
+    <script src="nav.js"></script>
+    <script>
+        function escapeHtml(value) {
+            return String(value ?? "").replace(/[&<>"']/g, char => ({
+                "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+            })[char]);
+        }
+
+        // Fetches the restaurant list from the API and draws one card per restaurant.
+        async function loadRestaurants(searchTerm = "") {
+            const list = document.getElementById("restaurant-list");
+            list.className = "";
+            list.innerHTML = '<div class="spinner"></div>';
+
+            const query = searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : "";
+            let restaurants;
+            try {
+                restaurants = await apiRequest(`/restaurants${query}`);
+            } catch (error) {
+                list.innerHTML = `<p class="error">${escapeHtml(error.message)}. Check that RestroCloud is running and try again.</p>`;
+                return;
+            }
+
+            if (restaurants.length === 0) {
+                list.innerHTML = `
+                    <div class="empty-state">
+                        <span class="icon">🍽️</span>
+                        No restaurants found. Try a different search.
+                    </div>
+                `;
+                return;
+            }
+
+            list.className = "card-grid";
+            list.innerHTML = restaurants.map(restaurant => `
+                <div class="card">
+                    <span class="cuisine-badge">${escapeHtml(restaurant.cuisine || "Various")}</span>
+                    <h3>${escapeHtml(restaurant.name)}</h3>
+                    <p class="muted">📍 ${escapeHtml(restaurant.address || "")}</p>
+                    <a class="button" href="menu.html?id=${restaurant.id}">View Menu</a>
+                </div>
+            `).join("");
+        }
+
+        document.getElementById("search-form").addEventListener("submit", (event) => {
+            event.preventDefault();
+            loadRestaurants(document.getElementById("search-input").value);
+        });
+
+        loadRestaurants();
+    </script>
+</body>
+</html>

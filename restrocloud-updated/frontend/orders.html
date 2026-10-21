@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>My Orders - RestroCloud</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <a href="index.html" class="brand">RestroCloud</a>
+        <div class="nav-links">
+            <a href="restaurants.html">Browse Restaurants</a>
+            <span id="auth-links"></span>
+        </div>
+    </nav>
+    <main class="container">
+        <div class="page-heading-row">
+            <div><h1>My Orders</h1><p class="muted">Track each order as the restaurant reviews it.</p></div>
+            <button type="button" class="secondary" id="refresh-orders">Refresh</button>
+        </div>
+        <p id="notice" role="status" aria-live="polite"></p>
+        <div id="orders-list"><div class="spinner"></div></div>
+    </main>
+    <script src="api.js"></script>
+    <script src="nav.js"></script>
+    <script>
+        const user = getUser();
+        function escapeHtml(value) {
+            return String(value ?? "").replace(/[&<>"']/g, char => ({
+                "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+            })[char]);
+        }
+        function formatDate(value) {
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? "Date unavailable" : date.toLocaleString();
+        }
+        function statusLabel(status) {
+            return ({ pending: "Pending restaurant decision", accepted: "Accepted", rejected: "Rejected" })[status] || status;
+        }
+        async function loadOrders() {
+            const list = document.getElementById("orders-list");
+            const refresh = document.getElementById("refresh-orders");
+            refresh.disabled = true;
+            try {
+                const orders = await apiRequest("/orders");
+                if (!orders.length) {
+                    list.innerHTML = '<div class="empty-state"><span class="icon">🧾</span>You have not placed any orders yet. <a href="restaurants.html">Browse restaurants</a> to get started.</div>';
+                    return;
+                }
+                list.innerHTML = orders.map(order => `
+                    <article class="order-card">
+                        <div class="order-card-heading">
+                            <div><h2>Order #${order.id} · ${escapeHtml(order.restaurant_name)}</h2><p class="muted">Placed ${escapeHtml(formatDate(order.created_at))}</p></div>
+                            <span class="status-pill status-${escapeHtml(order.status)}">${escapeHtml(statusLabel(order.status))}</span>
+                        </div>
+                        <p class="muted"><strong>Delivery address:</strong> ${escapeHtml(order.delivery_address || "Address not recorded for this older order")}</p>
+                        <div class="order-lines">
+                            ${order.items.map(item => `<div class="order-line"><span>${escapeHtml(item.item_name)} × ${item.quantity}</span><span>₹${escapeHtml(item.line_total)}</span></div>`).join("")}
+                        </div>
+                        <div class="order-card-footer"><span class="muted">Last updated ${escapeHtml(formatDate(order.updated_at))}</span><strong>Total: ₹${escapeHtml(order.total_amount)}</strong></div>
+                        ${order.status === "rejected" ? `<p class="rejection-reason"><strong>Reason from restaurant:</strong> ${escapeHtml(order.rejection_reason || "No reason was given.")}</p>` : ""}
+                        ${order.status === "pending" ? '<p class="muted order-hint">Waiting for the restaurant to accept or reject this order. This page refreshes automatically.</p>' : ""}
+                    </article>`).join("");
+                const params = new URLSearchParams(window.location.search);
+                const placed = params.get("placed");
+                if (placed) {
+                    document.getElementById("notice").className = "success-message";
+                    document.getElementById("notice").textContent = `Order #${placed} was placed. Its status is shown below.`;
+                    window.history.replaceState({}, "", "orders.html");
+                }
+            } catch (error) {
+                list.innerHTML = `<p class="error">${escapeHtml(error.message)}. Please log in with a customer account.</p>`;
+            } finally {
+                refresh.disabled = false;
+            }
+        }
+        if (!user || user.role !== "customer") {
+            window.location.href = "login.html";
+        } else {
+            document.getElementById("refresh-orders").addEventListener("click", loadOrders);
+            loadOrders();
+            window.setInterval(loadOrders, 10000);
+        }
+    </script>
+</body>
+</html>

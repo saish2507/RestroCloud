@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>RestroCloud</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>%F0%9F%8D%BD%EF%B8%8F</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <nav class="navbar">
+        <a href="index.html" class="brand">RestroCloud</a>
+        <div class="nav-links">
+            <a href="restaurants.html">Browse Restaurants</a>
+            <span id="auth-links"></span>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div class="hero">
+            <h1>Great food, one click away</h1>
+            <p>Browse restaurants and their menus, or sign up as an owner to run your own.</p>
+            <div class="hero-actions">
+                <a class="button" href="restaurants.html">Browse Restaurants</a>
+                <a class="button secondary" href="register.html">Become an Owner</a>
+            </div>
+        </div>
+
+        <div class="emoji-strip">🍕 🍔 🍜 🍣 🥗 🍰</div>
+
+        <div class="feature-grid">
+            <div class="feature-card">
+                <div class="icon">🔍</div>
+                <h3>Discover</h3>
+                <p>Search restaurants by name or cuisine and find your next favorite meal.</p>
+            </div>
+            <div class="feature-card">
+                <div class="icon">📋</div>
+                <h3>Browse Menus</h3>
+                <p>See dishes grouped by category, with prices, before you decide.</p>
+            </div>
+            <div class="feature-card">
+                <div class="icon">🏪</div>
+                <h3>Run Your Own</h3>
+                <p>Owners get a dashboard to manage their restaurant and menu in real time.</p>
+            </div>
+        </div>
+    </main>
+
+    <footer class="site-footer">Built with Flask, MySQL &amp; vanilla JS — RestroCloud</footer>
+
+    <script src="api.js"></script>
+    <script src="nav.js"></script>
+</body>
+</html>
